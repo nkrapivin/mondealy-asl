@@ -1,277 +1,170 @@
-state("Mondealy", "UDP Splitter")
+state("Mondealy")
 {
-	// lol.
-	byte doNothingPlzIgnore : "Mondealy.exe", 0x10000;
+	// Release build
+}
+
+state("Runner")
+{
+	// Development in-editor build
 }
 
 startup
 {
-	// -- ACTUAL MESSAGE HANDLERS: -- //
-	Action<object, string, string, bool, double> onInitMessage =
-	(dvars_, buildConfig, versionString, isDemo, osType) => {
-		// ????
-		dynamic dvars = dvars_;
-		print("[mdly]: Got init message! version=" + versionString + ",config=" + buildConfig);
-	};
-	Action<object, double, double, double, double, string, string, string> onBeatMessage =
-	(dvars_, storyStage, storyStagePrevious, chapter, playTime, roomName, roomPrevName, messageType) => {
-		dynamic dvars = dvars_;
-		dvars.oldChapterNum = dvars.chapterNum;
-		dvars.chapterNum = chapter;
-		dvars.roomPrevName = dvars.roomName;
-		dvars.roomName = roomName;
-		dvars.igt = playTime;
-		dvars.prevStoryStage = dvars.storyStage;
-		dvars.storyStage = storyStage;
-		
-		// hackfix: ignore these rooms entirely, bad bad bad!
-		if (roomName == "r_pre_menu" || dvars.roomPrevName == "r_pre_menu" || roomName == "r_user_limbo") {
-			print("[mdly]: Ignoring start rooms >:(");
-			return /* lol */;
-		}
-		
-		// -5 new_game_init story stage
-		if (dvars.storyStage == -5.0 && dvars.prevStoryStage != -5.0) {
-			dvars.startQueued = true;
-			dvars.resetQueued = false;
-			dvars.splitQueued = false;
-			print("[mdly]: Start is queued!");
-		}
-		
-		if (dvars.chapterNum != dvars.oldChapterNum) {
-			dvars.splitQueued = true;
-			print("[mdly]: Split is queued!");
-		}
-		
-		if (messageType == "inputs_dont_matter_anymore") {
-			dvars.splitQueued = true;
-			print("[mdly]: Split (from last Riley dialogue) is queued!");
-		}
-		
-		if (dvars.roomName == "r_menu" && dvars.roomPrevName != "r_menu") {
-			dvars.resetQueued = true;
-			print("[mdly]: Reset is queued! room=" + dvars.roomName + ", prev=" + dvars.roomPrevName);
-		}
-		print("[mdly]: Got beat message of type " + messageType);
-	};
-	
-	uint[] tbl = new uint[256];
-	uint poly = 0xEDB88320;
-	for (uint idx = 0u; idx < 256; idx++) {
-		uint val = idx;
-		for (uint bit = 8u; bit != 0; bit--) {
-			val = ((val & 1) == 0) ? (val >> 1) : ((val >> 1) ^ poly);
-		}
-		tbl[idx] = val;
-	}
-	
-	Func<byte[], object, string> ReadCString = (bytes, dvars_) => {
-		dynamic dvars = dvars_;
-		int start = (int)dvars.pos;
-		int end = start;
-		while (bytes[end] != 0 && end < bytes.Length)
-			++end;
-		string str = System.Text.Encoding.UTF8.GetString(bytes, start, end - start);
-		dvars.pos = end + 1;
-		return str;
-	};
-	Func<byte[], int, int, object, uint> CalcCRC = (buffer, offset, size, dvars_) => {
-		dynamic dvars = dvars_;
-		print("[mdly]: Inside CalcCRC");
-		uint[] table = (uint[])dvars.crcTable;
-		uint crc = uint.MaxValue;
-		if (size > 0) {
-			if (offset < 0)
-				offset = 0;
-			int end = offset + size;
-			if (end > buffer.Length)
-				end = buffer.Length;
-			for (int pos = offset; pos < end; ++pos) {
-				crc = (crc >> 8) ^ table[(crc ^ buffer[pos]) & 0xFF];
-			}
-		}
-		// GameMaker doesn't ~ by default, but Mondealy does
-		// to keep it compatible with other CRC32 implementations...
-		crc = ~crc;
-		print("[mdly]: Packet CRC = 0x" + crc.ToString("X8"));
-		return crc;
-	};
-	Action<byte[], object> onUdpBytes = (udpBytes, dvars_) => {
-		dynamic dvars = dvars_;
-		print("[mdly]: Inside onUdpBytes");
-		// sanity checks:
-		{
-			if (udpBytes.Length < 14)
-				throw new Exception("Too few bytes, expected at least 14 got " + udpBytes.Length.ToString());
-			uint magic = BitConverter.ToUInt32(udpBytes, 0);
-			if (magic != 0x594C444D)
-				throw new Exception("Invalid magic, expected 0x594C444D got 0x" + magic.ToString("X8"));
-			uint crc32 = BitConverter.ToUInt32(udpBytes, 4);
-			uint sizeOfData = BitConverter.ToUInt32(udpBytes, 8);
-			if (sizeOfData + 8 < udpBytes.Length)
-				throw new Exception("Invalid size, expected at least " + (sizeOfData + 8).ToString() + " got " + udpBytes.Length.ToString());
-			uint realCrc32 = CalcCRC(udpBytes, 8, udpBytes.Length - 8, dvars);
-			if (crc32 != realCrc32)
-				throw new Exception("Invalid CRC32, expected 0x" + crc32.ToString("X8") + " got 0x" + realCrc32.ToString("X8"));
-		}
-		
-		dvars.pos = 12; // useful data starts at 12th byte
-		string message = ReadCString(udpBytes, dvars);
-		dvars.prevMessageType = dvars.messageType;
-		dvars.messageType = message;
-		if (message == "obj_core_create") {
-			// init
-			string buildConfig = ReadCString(udpBytes, dvars);
-			string versionString = ReadCString(udpBytes, dvars);
-			bool isDemo = BitConverter.ToDouble(udpBytes, (int)dvars.pos) > 0.5; dvars.pos += 8;
-			double osType = BitConverter.ToDouble(udpBytes, (int)dvars.pos); dvars.pos += 8;
-			dvars.onInitMessage(dvars, buildConfig, versionString, isDemo, osType);
-		} else {
-			// beat
-			double storyStage = BitConverter.ToDouble(udpBytes, (int)dvars.pos); dvars.pos += 8;
-			double storyStagePrevious = BitConverter.ToDouble(udpBytes, (int)dvars.pos); dvars.pos += 8;
-			double chapter = BitConverter.ToDouble(udpBytes, (int)dvars.pos); dvars.pos += 8;
-			double playTime = BitConverter.ToDouble(udpBytes, (int)dvars.pos); dvars.pos += 8;
-			string roomName = ReadCString(udpBytes, dvars);
-			string roomPrevName = ReadCString(udpBytes, dvars);
-			dvars.onBeatMessage(dvars, storyStage, storyStagePrevious, chapter, playTime, roomName, roomPrevName, message);
-		}
-	};
-	AsyncCallback asyncCallback = (IAsyncResult ar) => {
-		object dvars_ = ar.AsyncState;
-		dynamic dvars = dvars_;
-		print("[mdly]: Inside IAR");
-		System.Net.Sockets.UdpClient uc = (System.Net.Sockets.UdpClient)dvars.udpClient;
-		if (uc == null) {
-			print("[mdly]: Got cancelled inside IAR :'(");
-			return /* lol */;
-		}
-		AsyncCallback ac = (AsyncCallback)dvars.asyncCallback;
-		Action<byte[], object> cb = (Action<byte[], object>)dvars.handler;
-		
-		System.Net.IPEndPoint ipEndPoint = null;
-		byte[] bytes = null;
-		try {
-			bytes = uc.EndReceive(ar, ref ipEndPoint);
-		} catch {
-			print("[mdly]: EndReceive threw, we're disposed");
-			return /* lol */;
-		}
-		print("[mdly]: After EndReceive");
-		cb(bytes, dvars);
-		uc.BeginReceive(ac, dvars);
-	};
-	
-	vars.udpClient = (System.Net.Sockets.UdpClient)null;
-	vars.asyncCallback = asyncCallback;
-	vars.handler = onUdpBytes;
-	vars.crcTable = tbl;
-	vars.onInitMessage = onInitMessage;
-	vars.onBeatMessage = onBeatMessage;
-	vars.pos = 12;
-	
-	
-	vars.chapterNum = 0;
-	vars.oldChapterNum = 0;
-	vars.roomName = "";
-	vars.roomPrevName = "";
-	vars.igt = 0.0;
-	vars.messageType = "";
-	vars.prevMessageType = "";
-	vars.storyStage = 0.0;
-	vars.prevStoryStage = 0.0;
-	
-	vars.splitQueued = false;
-	vars.startQueued = false;
-	vars.resetQueued = false;
-	print("[mdly]: Startup complete");
+	print("[mdly]: From startup");
+	return true;
 }
 
 init
 {
-	print("[mdly]: Before init");
-	if (((System.Net.Sockets.UdpClient)vars.udpClient) != null) {
-		((System.Net.Sockets.UdpClient)vars.udpClient).Dispose();
-		vars.udpClient = (System.Net.Sockets.UdpClient)null;
-		print("[mdly]: Disposed old udpClient instance...");
-	}
+	print("[mdly]: From init");
 	
-	System.Net.Sockets.UdpClient udpClient = new System.Net.Sockets.UdpClient(19780);
-	vars.udpClient = udpClient;
-	udpClient.BeginReceive((AsyncCallback)vars.asyncCallback, (object)vars);
-	print("[mdly]: After init");
-}
+	// -+=*(&!@#$%^Mondealy^%$#@!&)*=+-
+	// generated at runtime from a GML array of doubles to prevent
+	// accidental constant search or overlap...
+	var pattern = new byte[] {45,43,61,42,40,38,33,64,35,36,37,94,77,111,110,100,101,97,108,121,94,37,36,35,64,33,38,41,42,61,43,45};
+	var scanTarget = new SigScanTarget(pattern);
+	
+	print("[mdly]: Init before scan");
+	
+	Func<bool> scanIteration = () => {
+		foreach (var page in game.MemoryPages()) {
+			var scanner = new SignatureScanner(game, page.BaseAddress, (int)page.RegionSize);
+			// should be aligned by 16 or 32 bytes...
+			var bufferPtr = scanner.Scan(scanTarget, 16);
+			if (bufferPtr == IntPtr.Zero) {
+				continue;
+			}
+			
+			print("[mdly]: Found magic buffer at address " + bufferPtr.ToString());
+			
+			vars.pMagic = new StringWatcher(new DeepPointer(bufferPtr), ReadStringType.UTF8, 32);
+			vars.pVersion = new StringWatcher(new DeepPointer(bufferPtr + 32), ReadStringType.UTF8, 32);
+			vars.pConfig = new StringWatcher(new DeepPointer(bufferPtr + 64), ReadStringType.UTF8, 32);
+			vars.pStoryStage = new MemoryWatcher<double>(new DeepPointer(bufferPtr + 96));
+			vars.pChapter = new MemoryWatcher<double>(new DeepPointer(bufferPtr + 104));
+			vars.pPlayTime = new MemoryWatcher<double>(new DeepPointer(bufferPtr + 112));
+			vars.pFpsSetting = new MemoryWatcher<double>(new DeepPointer(bufferPtr + 120));
+			vars.pRoomName = new StringWatcher(new DeepPointer(bufferPtr + 128), ReadStringType.UTF8, 64);
+			
+			vars.watchers = new MemoryWatcherList() {
+				vars.pMagic,
+				vars.pVersion,
+				vars.pConfig,
+				vars.pStoryStage,
+				vars.pChapter,
+				vars.pPlayTime,
+				vars.pFpsSetting,
+				vars.pRoomName
+			};
+			
+			print("[mdly]: Initialized pointers to magic stuff");
+			return true;
+		}
 
-split
-{
-	if (vars.splitQueued) {
-		vars.splitQueued = false;
-		print("[mdly]: Split is handled!");
-		return true;
+		print("[mdly]: Scan iteration failed");
+		return false;
+	};
+	
+	vars.scanOk = false;
+	var attempt = 0;
+	while (!scanIteration()) {
+		// ???
+		++attempt;
+		if (attempt > 1000) {
+			print("[mdly]: Init failed, no --livesplit launch parameter?");
+			return false;
+		}
 	}
 	
-	return false;
-}
-
-start
-{
-	if (vars.startQueued) {
-		vars.startQueued = false;
-		print("[mdly]: Start is handled!");
-		return true;
-	}
-	
-	return false;
-}
-
-reset
-{
-	if (vars.resetQueued) {
-		vars.resetQueued = false;
-		print("[mdly]: Reset is handled!");
-		return true;
-	}
-	
-	return false;
+	print("[mdly]: Init done in " + attempt.ToString() + " attempts");
+	refreshRate = 60; // default fps refresh rate
+	// that will be updated in update action when the game fully loads
+	// (either stays at 60 or sets to Mondealy's value)
+	vars.scanOk = true;
+	return true;
 }
 
 exit
 {
-	print("[mdly]: Disposing udpClient");
-	if (((System.Net.Sockets.UdpClient)vars.udpClient) != null) {
-		((System.Net.Sockets.UdpClient)vars.udpClient).Dispose();
-		vars.udpClient = (System.Net.Sockets.UdpClient)null;
-		print("[mdly]: Disposed old udpClient instance...");
-	}
-	
-	// reset these just in case...
-	vars.chapterNum = 0;
-	vars.oldChapterNum = 0;
-	vars.roomName = "";
-	vars.roomPrevName = "";
-	vars.igt = 0.0;
-	vars.messageType = "";
-	vars.prevMessageType = "";
-	vars.storyStage = 0.0;
-	vars.prevStoryStage = 0.0;
-	
-	vars.splitQueued = false;
-	vars.startQueued = false;
-	vars.resetQueued = false;
-	
-	print("[mdly]: Exit complete");
+	print("[mdly]: From exit");
+	// currently we don't really need any shutdown logic for a process
 	return true;
 }
 
 shutdown
 {
-	print("[mdly]: Disposing udpClient");
-	if (((System.Net.Sockets.UdpClient)vars.udpClient) != null) {
-		((System.Net.Sockets.UdpClient)vars.udpClient).Dispose();
-		vars.udpClient = (System.Net.Sockets.UdpClient)null;
-		print("[mdly]: Disposed old udpClient instance...");
-	}
-	
-	print("[mdly]: Shutdown complete");
+	print("[mdly]: From shutdown");
+	// same applies for this action
 	return true;
 }
+
+update
+{
+	if (!vars.scanOk) {
+		return false;
+	}
+	
+	vars.watchers.UpdateAll(game);
+	
+	// config and version never change at all
+	// but all memwatch vars shall only be accessed in update...
+	
+	if (vars.pConfig.Changed) {
+		print("[mdly]: Build Config = " + vars.pConfig.Current);
+	}
+	
+	if (vars.pVersion.Changed) {
+		print("[mdly]: Game Version = " + vars.pVersion.Current);
+	}
+	
+	// make sure refreshrate is set to Mondealy's fps for more accurate results
+	if (vars.pFpsSetting.Current != (double)refreshRate) {
+		refreshRate = (int)vars.pFpsSetting.Current;
+		print("[mdly]: Set new refresh rate = " + refreshRate);
+	}
+	
+	// just for debugging...
+	if (vars.pRoomName.Changed) {
+		print("[mdly]: New room name = " + vars.pRoomName.Current);
+	}
+	
+	return true;
+}
+
+split
+{
+		// split on chapter change or when entering the r_credits room
+	return
+		(vars.pChapter.Changed && vars.pChapter.Current > 0.0) ||
+		(vars.pRoomName.Changed && vars.pRoomName.Current == "r_credits");
+}
+
+start
+{
+		// story stage is -5 (new game init) or we are in r_mondealy_intro (forest tavern)
+	return
+		(vars.pStoryStage.Current == -5.0 || vars.pRoomName.Current == "r_mondealy_intro");
+}
+
+reset
+{
+		// we're in the menu, IGT isn't running anyway
+	return
+		(vars.pRoomName.Current == "r_menu");
+}
+
+isLoading
+{
+		// ATTENTION: DO WE REALLY REALLY NEED THIS????
+		// THIS WILL FORCE LIVESPLIT TO ALWAYS USE MONDEALY'S TIMER (which may not be accurate!)
+		// Maybe make this a setting?
+	return true;
+}
+
+gameTime
+{
+		// pulls directly from the current global IGT
+	return
+		(TimeSpan.FromSeconds(vars.pPlayTime.Current));
+}
+
