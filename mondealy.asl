@@ -88,6 +88,7 @@ exit
 {
 	print("[mdly]: From exit");
 	// currently we don't really need any shutdown logic for a process
+	timer.IsGameTimePaused = true; // this should pause the timer if the game crashed I hope?
 	return true;
 }
 
