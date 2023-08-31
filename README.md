@@ -1,7 +1,7 @@
 # mondealy-asl
 Mondealy ASL script
 
-To use this script you need a special version of the game from the `livesplit` branch.
+This script can only be used with Mondealy 1.0.3 or newer.
 
 Set the following launch parameters: `--livesplit`
 
