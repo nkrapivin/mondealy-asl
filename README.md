@@ -3,6 +3,8 @@ Mondealy ASL script
 
 This script can only be used with Mondealy 1.0.3 or newer.
 
+[See this page for the usage guide!](https://www.speedrun.com/Mondealy/guides/gps2j)
+
 Set the following launch parameters: `--livesplit`
 
 The timer is automatically started as soon as the prologue room starts and the menu room ends.
@@ -17,7 +19,7 @@ If the `--livesplit` launch parameter is specified,
 
 the game allocates a buffer with the following structure:
 
-```
+```c
 typedef uint8_t char8_t; // UTF-8 char
 struct MondealyHeapBuffer {
     char8_t bufferMagic[32]; // "-+=*(&!@#$%^Mondealy^%$#@!&)*=+-" look for this on the heap.
